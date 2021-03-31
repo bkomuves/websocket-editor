@@ -1,4 +1,8 @@
+
+-- | Backend websocket server 
+
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms   #-}
 
 module Main where
 
@@ -11,7 +15,7 @@ import Data.Text (Text)
 import Text.Read (readMaybe)
 
 import Control.Exception (finally,try,SomeException,ErrorCall,PatternMatchFail)
-import Control.Monad (forM_, forever)
+import Control.Monad (forM_, forever, when)
 import Control.Concurrent 
 
 import qualified Data.Text    as T
@@ -33,10 +37,12 @@ import LatexInput
 -- debug  t x y = trace (">>> " ++ t ++ " = " ++ show x) y
 
 --------------------------------------------------------------------------------
+-- * Configuration
 
 serverPort = 11667
 
 --------------------------------------------------------------------------------
+-- * Websocket server
 
 type Client = (WS.Connection)
 
@@ -44,7 +50,7 @@ type Client = (WS.Connection)
 -- broadcast :: Text -> ServerState -> IO ()
 -- broadcast message clients = do
 --   T.putStrLn message
---   forM_ clients $ \(conn) -> WS.sendTextData conn message
+--   forM_ clients $ \(conn) -> sendTextData conn message
 
 -- The main function first creates a new state for the server, then spawns the
 -- actual server. For this purpose, we use the simple server provided by
@@ -118,7 +124,7 @@ data Change
   deriving (Eq,Show)
 
 --------------------------------------------------------------------------------
--- ** editor buffer type
+-- * Editor buffer type
 
 data Buffer 
   = Buffer { fromBuffer :: Seq T.Text }
@@ -131,7 +137,7 @@ bufferFromText :: LT.Text -> Buffer
 bufferFromText text = Buffer (Seq.fromList $ map LT.toStrict $ LT.splitOn "\n" text)
 
 bufferToText :: Buffer -> LT.Text 
-bufferToText (Buffer seq) = LT.unlines (map LT.fromStrict $ F.toList seq)
+bufferToText (Buffer seq) = LT.intercalate "\n" (map LT.fromStrict $ F.toList seq)
 
 takeBuffer :: Pos -> Buffer -> Buffer
 takeBuffer (Pos ln col) (Buffer seq) 
@@ -175,6 +181,24 @@ parseChange :: LT.Text -> Maybe Change
 parseChange what = Change <$> parseRange header <*> pure (LT.tail rest) where 
   (header,rest) = LT.span (/= ',') what
 
+-- | Message from the web client
+data Message
+  = BufferUpdate Change     -- ^ update the buffer
+  | ActiveBuffer Int        -- ^ the user wants to change the active buffer
+  | ListBuffers             -- ^ the client wants to know the list of buffers
+  deriving Show
+
+parseMessage :: LT.Text -> Maybe Message
+parseMessage text
+  | LT.length text >= 2 = let { cmd = LT.index text 0 ; rest = LT.drop 2 text } in handle cmd rest
+  | otherwise = Nothing
+  where
+    handle c payload = case c of
+      'u' -> BufferUpdate <$> parseChange payload
+      'b' -> ActiveBuffer <$> readMaybe (LT.unpack payload)
+      'l' -> Just ListBuffers 
+      _   -> Nothing
+
 --------------------------------------------------------------------------------
 -- ** protocol encodings
 
@@ -193,27 +217,35 @@ encodeChangeLT = LT.pack . encodeChange
 --------------------------------------------------------------------------------
 -- ** protocol commands
 
+sendTextData ::  WS.Connection -> LT.Text -> IO ()
+sendTextData conn text = do
+  -- LT.putStrLn (LT.append "sending: " text)
+  WS.sendTextData conn text
+
 setFeedbackContent :: WS.Connection -> LT.Text -> IO ()
-setFeedbackContent conn text = WS.sendTextData conn (LT.append "f," text)
+setFeedbackContent conn text = sendTextData conn (LT.append "f," text)
 
 setErrorContent :: WS.Connection -> LT.Text -> IO ()
-setErrorContent conn text = WS.sendTextData conn (LT.append "e," text)
+setErrorContent conn text = sendTextData conn (LT.append "e," text)
 
 setEditorContent :: WS.Connection -> LT.Text -> IO ()
-setEditorContent conn text = WS.sendTextData conn (LT.append "c," text)
+setEditorContent conn text = sendTextData conn (LT.append "c," text)
+
+resetEditorContent :: WS.Connection -> LT.Text -> IO ()
+resetEditorContent conn text = sendTextData conn (LT.append "r," text)
 
 applyEditorChange :: WS.Connection -> Change -> IO ()
-applyEditorChange conn change = WS.sendTextData conn (LT.append "d," (encodeChangeLT change))
+applyEditorChange conn change = sendTextData conn (LT.append "d," (encodeChangeLT change))
 
 -- | Input is the height of the top pane in percentages 
 -- (so should be in the range 0-100; and in practice, more like 20-80)
 setHorizontalSplit :: WS.Connection -> Int -> IO () 
-setHorizontalSplit conn ht = WS.sendTextData conn (T.pack $ "h," ++ show ht)
+setHorizontalSplit conn ht = sendTextData conn (LT.pack $ "h," ++ show ht)
 
 -- | Input is the width of the left pane in percentages 
 -- (so should be in the range 0-100; and in practice, more like 20-80)
 setVerticalSplit :: WS.Connection -> Int -> IO () 
-setVerticalSplit conn wd = WS.sendTextData conn (T.pack $ "v," ++ show wd)
+setVerticalSplit conn wd = sendTextData conn (LT.pack $ "v," ++ show wd)
 
 --------------------------------------------------------------------------------
 -- ** LaTeX style input
@@ -251,50 +283,102 @@ escapeHTML = concatMap f where
   f c    = [c]
 
 --------------------------------------------------------------------------------
--- ** The server
+-- * The server logic
 
-type ServerState = Buffer
+data ServerState = ServerState
+  { _currentbuf :: !Buffer
+  , _buffers    :: !(Seq NamedBuffer)
+  , _activeBuf  :: !Int
+  }
+
+data NamedBuffer    = NamedBuffer String Buffer
+pattern NB name buf = NamedBuffer name buf
+
+bufferName :: NamedBuffer -> String
+bufferName (NamedBuffer name _) = name
+
+forgetName :: NamedBuffer -> Buffer
+forgetName (NamedBuffer _ buf) = buf
 
 initialServerState :: ServerState
-initialServerState = emptyBuffer
+initialServerState = ServerState
+  { _currentbuf = emptyBuffer
+  , _buffers    = Seq.fromList bufs
+  , _activeBuf  = -1                  
+  }
+  where
+    bufs =
+      [ NamedBuffer "*scratch*" (bufferFromText "-- scratch area --") -- emptyBuffer
+      , NamedBuffer "file1.ext" (bufferFromText file1)
+      , NamedBuffer "file2.ext" (bufferFromText file2)
+      ]
+
+file1 = LT.intercalate "\n" [ "; file1.ext" , ";" , "" , "hullo world!" ]
+file2 = LT.intercalate "\n" [ "; file2.ext" , ";" , "" , "bruhahaha"    ]
+
+--------------------------------------------------------------------------------
 
 handler :: MVar ServerState -> WS.Connection -> IO () 
-handler state conn = forever $ do
-  msg <- WS.receiveData conn
-  -- LT.putStrLn $ LT.append "message received: " msg
+handler stateMVar conn = forever $ do
 
-  case parseChange msg of
+  msg <- WS.receiveData conn
+  --LT.putStrLn $ LT.append "message received: " msg
+  case parseMessage msg of
 
     Nothing -> do 
-      putStrLn "error: cannot parse change message!!!"
+      putStrLn "error: cannot parse client message!!!"
       LT.putStrLn msg
 
-    Just change -> do
-      -- print change
+    Just msg -> case msg of
 
-      buf <- readMVar state
-      let buf' = applyChange change buf
+      ListBuffers -> do
+        state@(ServerState _ bufs _) <- readMVar stateMVar
+        let payload = show $ map bufferName (F.toList bufs)
+        sendTextData conn (LT.pack $ "l," ++ payload)
 
-      case handleLaTeX buf' change of 
-        Nothing    -> return ()
-        Just extra -> applyEditorChange conn extra
+      ActiveBuffer idx -> do
+        state@(ServerState cur bufs oldidx) <- takeMVar stateMVar
+        state' <- if (idx == oldidx) then return state else do
+          let n = Seq.length bufs
+          if idx >= 0 && idx < n
+            then do
+              resetEditorContent conn (bufferToText (forgetName (Seq.index bufs idx)))
+              return $ state { _activeBuf = idx , _currentbuf = emptyBuffer } -- , _buffers = bufs' }
+            else return state
+        putMVar stateMVar $! state'
+        
+      BufferUpdate change -> do
+        -- print change
+        state@(ServerState buf bufs idx) <- readMVar stateMVar
+        let buf'      = applyChange change buf
+            NB name _ = Seq.index bufs idx
+            bufs'     = Seq.update idx (NB name buf') bufs 
+            state'    = state { _currentbuf = buf' , _buffers = bufs' }    
+        case handleLaTeX buf' change of 
+          Nothing    -> return ()
+          Just extra -> applyEditorChange conn extra
+        takeMVar stateMVar >> (putMVar stateMVar $! state')      
+        updateFeedbackPanes stateMVar conn 
 
-      takeMVar state >> (putMVar state $! buf')
-    
-      let text = bufferToText buf'
+--------------------------------------------------------------------------------
 
-      -- putStrLn "================="
-      -- LT.putStrLn text
-      -- putStrLn "^^^^^^^^^^^^^^^^^"
+updateFeedbackPanes :: MVar ServerState -> WS.Connection -> IO () 
+updateFeedbackPanes stateMVar conn = do
 
-      let feedback = LT.pack $ escapeHTML $ unlines
-            [ "chars = " ++ show (LT.length text)
-            , "words = " ++ show (length $ LT.words text)
-            , "lines = " ++ show (length $ LT.lines text)
-            ]
-      let htmltext = LT.pack $ escapeHTML $ LT.unpack text
-
-      setFeedbackContent conn feedback
-      setErrorContent    conn htmltext
-    
+  state@(ServerState cur bufs idx) <- readMVar stateMVar
+  let text = bufferToText cur
+  
+  -- putStrLn "================="
+  -- LT.putStrLn text
+  -- putStrLn "^^^^^^^^^^^^^^^^^"
+  
+  let feedback = LT.pack $ escapeHTML $ unlines
+        [ "chars = " ++ show (LT.length text)
+        , "words = " ++ show (length $ LT.words text)
+        , "lines = " ++ show (length $ LT.lines text)
+        ]
+  let htmltext = LT.pack $ escapeHTML $ LT.unpack text
+  setFeedbackContent conn feedback
+  setErrorContent    conn htmltext
          
+

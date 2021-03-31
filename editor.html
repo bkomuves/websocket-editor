@@ -30,6 +30,14 @@ table, td, tr {
   vertical-align: top;
 }
 
+button,input,select,textarea,optgroup{ font:inherit ; margin:0 }
+button { overflow:hidden }
+
+.tab-button { width:100%; text-align:left; padding:8px 16px; border:none; display:block; outline:0; background-color:#d8d8d8;}
+.tab-button:hover { color: #000!important; background-color: #bbb!important }
+.selected-red     { color: #fff!important; background-color: #c43326!important } 
+.card { box-shadow: 0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12) }
+
 /* Split the screen in half along a vertical line */
 .vsplit {
   height: 100%;
@@ -42,12 +50,17 @@ table, td, tr {
 /* Control the left side */
 .left {
   left: 0;
+  width: 10%;
+}
+/* Control the middle side */
+.middle {
+  left:  10%;
   width: 50%;
 }
 /* Control the right side */
 .right {
   right: 0;
-  width: 50%;
+  width: 40%;
 }
 
 /* Split the screen in half along a horizontal line */
@@ -87,27 +100,15 @@ table, td, tr {
 
 <script>
 
-function changeFeedbackText(newtext) {
-  document.getElementById("feedback").innerHTML = newtext;
-}
+var serverURL = "ws://localhost:11667";
+var protocols = ["editor-protocol"];
 
-function changeErrorText(newtext) {
-  document.getElementById("error").innerHTML = newtext;
-}
+var theWebSocket = null;
+var theEditor    = null;
+var theActiveBuffer = 0;
+var counter = 0;
 
-function setVerticalSplit(text) {
-  var left  = Math.round(parseFloat(text))
-  var right = 100-left;
-  document.getElementById('left-pane' ).style.width = (left +'%');
-  document.getElementById('right-pane').style.width = (right+'%');
-}
-
-function setHorizontalSplit(text) {
-  var top = Math.round(parseFloat(text))
-  var bot = 100-top;
-  document.getElementById('top-pane'   ).style.height = (top+'%');
-  document.getElementById('bottom-pane').style.height = (bot+'%');
-}
+// -------------------------------------
 
 function parsePos(text) {
   var arr = text.split(":");
@@ -119,12 +120,68 @@ function parseRange(text) {
   return { from:parsePos(arr[0]) , to:parsePos(arr[1]) }; 
 }
 
-var serverURL = "ws://localhost:11667";
-var protocols = ["editor-protocol"];
+// -------------------------------------
 
-var theWebSocket;
-var theEditor;
-var counter = 0;
+function changeFeedbackText(newtext) {
+  document.getElementById("feedback").innerHTML = newtext;
+}
+
+function changeErrorText(newtext) {
+  document.getElementById("error").innerHTML = newtext;
+}
+
+function setVerticalSplit(text) {
+  var left   = 10;
+  var middle = Math.round(parseFloat(text));
+  var right  = 100-left-middle;
+  document.getElementById('left-pane'  ).style.width = (left   +'%');
+  document.getElementById('middle-pane').style.width = (middle +'%');
+  document.getElementById('right-pane' ).style.width = (right  +'%');
+}
+
+function setHorizontalSplit(text) {
+  var top = Math.round(parseFloat(text));
+  var bot = 100-top;
+  document.getElementById('top-pane'   ).style.height = (top+'%');
+  document.getElementById('bottom-pane').style.height = (bot+'%');
+}
+
+function updateBufferTabStyles() {
+  var tablinks = document.getElementsByClassName("tablink");
+  for (i = 0; i < tablinks.length; i++) {
+    tablinks[i].className = tablinks[i].className.replace(" selected-red", ""); 
+  }
+  var selected = document.getElementById("buffer"+theActiveBuffer);
+  if (selected != null) {
+    selected.style.display = "block";
+    selected.className += " selected-red";
+  }
+}
+
+function setActiveBuffer(idx) {
+  theActiveBuffer = idx;
+  theWebSocket.send("b,"+idx);
+  updateBufferTabStyles();
+}
+
+function setEditorTabs(text) {
+  var arr = JSON.parse(text);
+  var n = arr.length;
+  var i;
+  var div = document.getElementById('tab-container');
+  while (div.firstChild) { div.removeChild(div.firstChild); }
+  for (i=0;i<n;i++) {
+    var el = document.createElement("button");   
+    el.setAttribute("class"  , "tab-button tablink");
+    el.setAttribute("onclick", "setActiveBuffer(" + i + ")"   );
+    el.setAttribute("id"     , "buffer" + i );
+    el.innerHTML = arr[i];
+    div.appendChild(el);
+  }
+  updateBufferTabStyles();
+}
+
+// -------------------------------------
 
 function editFromServer(msg) {
   var arr = msg.split(",");
@@ -146,27 +203,46 @@ function onEditorChange(cm,changeObj) {
   msg = header + text;
 
   //console.log(msg);
-  theWebSocket.send(msg);
+  theWebSocket.send("u,"+msg);
 
   counter = counter+1;
-  // console.log(counter);
+  // console.log("counter = " + counter);
   // changeErrorText("counter = " + counter);
 }
 
 function resize() {
-
   var ht = document.getElementById('editor').offsetHeight; 
-  //console.log("height = " + ht);
-
-  // var ht_top = Math.round(ht*0.75);
-  // var ht_bot = ht - ht_top;
-
   theEditor.setSize( null, ht );
+}
+
+function resetCodeMirror() {  
+  config = { mode: null, theme: 'solarized light' , value: 'editor' , tabSize: 2 ,
+             lineWrapping: true , lineNumbers: true };
+
+  editor = document.getElementById('editor');
+  while (editor.firstChild) { editor.removeChild(editor.firstChild); }
+
+  var textarea = document.createElement("textarea");   
+  textarea.setAttribute("id"   , "code");
+  textarea.setAttribute("name" , "code");
+  textarea.setAttribute("style", "width:100%;height:100%");
+  editor.appendChild(textarea);
+
+  // textarea = document.getElementById('code');
+  // textarea.placeholder ='edit text here';
+  if (theEditor != null) { delete theEditor; }
+  theEditor = CodeMirror.fromTextArea( textarea , config );
+  theEditor.setValue('');
+  resize();
+  theEditor.on("change", onEditorChange);
 }
 
 function initialize() { 
 
+  // resetCodeMirror();
+
   theWebSocket = new WebSocket(serverURL,protocols);
+
   theWebSocket.onmessage = function(event) {
     // console.log(event.data);
     var msg  = event.data;
@@ -176,27 +252,36 @@ function initialize() {
       case 'f': changeFeedbackText(text); break; 
       case 'e': changeErrorText   (text); break; 
       case 'c': theEditor.setValue(text); break; 
+      case 'r': resetCodeMirror(); theEditor.setValue(text); break; 
       case 'd': editFromServer    (text); break;
       case 'v': setVerticalSplit  (text); break;
       case 'h': setHorizontalSplit(text); break;
+      case 'l': setEditorTabs     (text); break;
       default: 
         console.log('unknown command from the webSocket server: ' + cmd);
     }
   }
 
-  config = { mode: null, theme: 'solarized light' , value: 'editor' , tabSize: 2 ,
-             lineWrapping: true , lineNumbers: true };
+  theWebSocket.onopen = function(event) { 
+    console.log("websocket is open now.");
+    var status = document.getElementById('conn-status');
+    console.log(status);
+    status.style.color = '#ccc';
+    status.innerHTML = 'connected';
+    theWebSocket.send("l,");     // please list the buffers
+    setActiveBuffer(0);          // and set the active buffer
+  };
 
-  textarea = document.getElementById('code');
-  textarea.placeholder ='edit text here';
-
-  theEditor = CodeMirror.fromTextArea( textarea , config );
-  theEditor.setValue('');
-
-  resize();
-
-  theEditor.on("change", onEditorChange);
-
+  // doesn't seem to be triggered...
+  var my_onclose = function(event) { 
+    console.log("websocket is closed");
+    status = document.getElementById('conn-status');
+    status.style.color = '#000';
+    status.innerHTML = 'disconnected';
+  };
+  theWebSocket.onclosed = my_onclose;
+  theWebSocket.onerror  = my_onclose;
+    
 }
 
 </script> 
@@ -209,11 +294,16 @@ function initialize() {
 
 <div id="container" style="border: 2px solid black;"> 
 
-  <div id="left-pane" class="vsplit left">
-    <div id="editor" style="display: block; width:100%; height:100%; background-color:#cfc;">
-      <textarea id="code" name="code" width="100%" height="100%"> 
-      </textarea>
+  <div id="left-pane" class="vsplit left" style="background-color:#888;">
+    <div id="tab-container" class="card" style="background-color:#aaa; width:100%;">
     </div>
+    <div id="conn-status" align="center" valign="bottom" style="display:none;bottom:0;">disconnected</div> 
+  </div>
+
+  <div id="middle-pane" class="vsplit middle">
+    <div id="editor" style="display: block; width:100%; height:100%; background-color:#fff;">
+      <!--  <textarea id="code" name="code" width="100%" height="100%"></textarea> -->
+   </div>
   </div>
   
   <div id="right-pane" class="vsplit right">
