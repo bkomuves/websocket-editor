@@ -262,3 +262,6 @@ handler state conn = forever $ do
       WS.sendTextData conn (LT.append "f," feedback)
       WS.sendTextData conn (LT.append "e," htmltext)
     
+      -- WS.sendTextData conn $ if (LT.length text         < 10) then ("v,30" :: T.Text) else "v,50" 
+      -- WS.sendTextData conn $ if (length (LT.lines text) < 4 ) then ("h,66" :: T.Text) else "h,40" 
+         

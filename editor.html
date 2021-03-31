@@ -33,7 +33,6 @@ table, td, tr {
 /* Split the screen in half along a vertical line */
 .vsplit {
   height: 100%;
-  width: 50%;
   position: fixed;
   z-index: 1;
   top: 0;
@@ -43,15 +42,16 @@ table, td, tr {
 /* Control the left side */
 .left {
   left: 0;
+  width: 50%;
 }
 /* Control the right side */
 .right {
   right: 0;
+  width: 50%;
 }
 
 /* Split the screen in half along a horizontal line */
 .hsplit {
-  height: 50%;
   width: 100%;
   /* position: fixed; */
   z-index: 2;
@@ -62,12 +62,12 @@ table, td, tr {
 /* Control the top half */
 .top {
   top: 0;
-  height: 75%;
+  height: 67%;
 }
 /* Control the bottom half */
 .bottom {
   bottom: 0;
-  height: 25%;
+  height: 33%;
 }
 
 .teletype {
@@ -93,6 +93,20 @@ function changeFeedbackText(newtext) {
 
 function changeErrorText(newtext) {
   document.getElementById("error").innerHTML = newtext;
+}
+
+function setVerticalSplit(text) {
+  var left  = Math.round(parseFloat(text))
+  var right = 100-left;
+  document.getElementById('left-pane' ).style.width = (left +'%');
+  document.getElementById('right-pane').style.width = (right+'%');
+}
+
+function setHorizontalSplit(text) {
+  var top = Math.round(parseFloat(text))
+  var bot = 100-top;
+  document.getElementById('top-pane'   ).style.height = (top+'%');
+  document.getElementById('bottom-pane').style.height = (bot+'%');
 }
 
 function parsePos(text) {
@@ -163,6 +177,8 @@ function initialize() {
       case 'e': changeErrorText   (text); break; 
       case 'c': theEditor.setValue(text); break; 
       case 'd': editFromServer    (text); break;
+      case 'v': setVerticalSplit  (text); break;
+      case 'h': setHorizontalSplit(text); break;
       default: 
         console.log('unknown command from the webSocket server: ' + cmd);
     }

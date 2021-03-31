@@ -27,6 +27,8 @@ The server can send the following messages:
     e,error_window_text 
     c,new_editor_content
     d,l1:c1-l2:c2,replacement
+    v,50
+    h,75
 
 which has the following meanings:
 
@@ -34,7 +36,8 @@ which has the following meanings:
 * `e` replaces the content of the "error pane"
 * `c` replaces the content of the editor
 * `d` applies an atomic update on the editor buffer
-
+* `v` sets the vertical split ratio (percentage, the size of the left pane)
+* `h` sets the horizontal split ratio (percentage, the size of the top pane)
 
 LaTeX-style unicode input
 -------------------------
