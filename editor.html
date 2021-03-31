@@ -1,0 +1,224 @@
+
+<html>
+
+<meta charset="UTF-8">
+
+<head>
+
+<link rel=stylesheet href=./codemirror.css>
+<link rel=stylesheet href=./solarized.css>
+<script src=./codemirror.js></script>
+
+<style>
+
+body {
+  margin:  0px; 
+  padding: 15px;
+  background-color: #888;
+  overflow: hidden;
+}
+table {
+  table-layout: fixed;
+}
+table, td, tr {
+  margin:  0px; 
+  padding: 0px; 
+  outline-width: 0px;
+  border-style: 0px none black;
+  border-collapse: collapse;
+  overflow: hidden;
+  vertical-align: top;
+}
+
+/* Split the screen in half along a vertical line */
+.vsplit {
+  height: 100%;
+  width: 50%;
+  position: fixed;
+  z-index: 1;
+  top: 0;
+  overflow-x: hidden;
+  padding: 0px;
+}
+/* Control the left side */
+.left {
+  left: 0;
+}
+/* Control the right side */
+.right {
+  right: 0;
+}
+
+/* Split the screen in half along a horizontal line */
+.hsplit {
+  height: 50%;
+  width: 100%;
+  /* position: fixed; */
+  z-index: 2;
+  right: 0;
+  overflow-y: hidden;
+  padding: 0px;
+}
+/* Control the top half */
+.top {
+  top: 0;
+  height: 75%;
+}
+/* Control the bottom half */
+.bottom {
+  bottom: 0;
+  height: 25%;
+}
+
+.teletype {
+  font-family: "Monaco", "STIX Two Math", monospace;
+  font-size: 13pt;
+  overflow: scroll;
+}
+.CodeMirror {
+  font-family: "Monaco", "STIX Two Math", monospace;
+  font-size: 13pt;
+}
+
+</style>
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<script>
+
+function changeFeedbackText(newtext) {
+  document.getElementById("feedback").innerHTML = newtext;
+}
+
+function changeErrorText(newtext) {
+  document.getElementById("error").innerHTML = newtext;
+}
+
+function parsePos(text) {
+  var arr = text.split(":");
+  return { line:parseInt(arr[0]) , ch:parseInt(arr[1]) }; 
+}
+
+function parseRange(text) {
+  var arr = text.split("-");
+  return { from:parsePos(arr[0]) , to:parsePos(arr[1]) }; 
+}
+
+var serverURL = "ws://localhost:11667";
+var protocols = ["editor-protocol"];
+
+var theWebSocket;
+var theEditor;
+var counter = 0;
+
+function editFromServer(msg) {
+  var arr = msg.split(",");
+  var range = parseRange(arr[0]);
+  var replacement = arr[1];
+  theEditor.replaceRange(replacement,range.from,range.to);
+}
+
+function onEditorChange(cm,changeObj) {
+  xfrom  = changeObj.from;
+  xto    = changeObj.to; 
+  header = xfrom.line + ':' + xfrom.ch + '-' + xto.line + ':' + xto.ch + ',';
+
+  lines = changeObj.text;    // it's an array of strings...
+  n     = lines.length;
+  text  = lines[0];
+  i=1; while(i<n) { text = text.concat("\n",lines[i]); i=i+1; }
+
+  msg = header + text;
+
+  //console.log(msg);
+  theWebSocket.send(msg);
+
+  counter = counter+1;
+  // console.log(counter);
+  // changeErrorText("counter = " + counter);
+}
+
+function resize() {
+
+  var ht = document.getElementById('editor').offsetHeight; 
+  //console.log("height = " + ht);
+
+  // var ht_top = Math.round(ht*0.75);
+  // var ht_bot = ht - ht_top;
+
+  theEditor.setSize( null, ht );
+}
+
+function initialize() { 
+
+  theWebSocket = new WebSocket(serverURL,protocols);
+  theWebSocket.onmessage = function(event) {
+    // console.log(event.data);
+    var msg  = event.data;
+    var cmd  = msg[0];
+    var text = msg.slice(2);
+    switch(cmd) { 
+      case 'f': changeFeedbackText(text); break; 
+      case 'e': changeErrorText   (text); break; 
+      case 'c': theEditor.setValue(text); break; 
+      case 'd': editFromServer    (text); break;
+      default: 
+        console.log('unknown command from the webSocket server: ' + cmd);
+    }
+  }
+
+  config = { mode: null, theme: 'solarized light' , value: 'editor' , tabSize: 2 ,
+             lineWrapping: true , lineNumbers: true };
+
+  textarea = document.getElementById('code');
+  textarea.placeholder ='edit text here';
+
+  theEditor = CodeMirror.fromTextArea( textarea , config );
+  theEditor.setValue('');
+
+  resize();
+
+  theEditor.on("change", onEditorChange);
+
+}
+
+</script> 
+
+<!-- ======================================================================= -->
+
+</head>
+
+<body onload="initialize()" onresize="resize()">
+
+<div id="container" style="border: 2px solid black;"> 
+
+  <div id="left-pane" class="vsplit left">
+    <div id="editor" style="display: block; width:100%; height:100%; background-color:#cfc;">
+      <textarea id="code" name="code" width="100%" height="100%"> 
+      </textarea>
+    </div>
+  </div>
+  
+  <div id="right-pane" class="vsplit right">
+
+    <div id="top-pane" class="hsplit top">
+      <div id="feedback" class="teletype" style="width:100%; height:100%; background-color:#ccf;">
+        feedback
+      </div>
+    </div>
+    
+    <div id="bottom-pane" class="hsplit bottom">
+      <div id="error-wrapper" class="teletype" style="width:100%; height:100%; background-color:#fcc;">
+        <span id="error" style="display: inline; background-color:#c88;">errors</span>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+</body>
+
+</html>
+
