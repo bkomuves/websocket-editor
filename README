@@ -35,3 +35,11 @@ which has the following meanings:
 * `c` replaces the content of the editor
 * `d` applies an atomic update on the editor buffer
 
+
+LaTeX-style unicode input
+-------------------------
+
+Using the `d` command above, we can implement a simple LaTeX-style unicode method:
+Simply type `\alpha` and press TAB to finalize (or autocomplete, if there is a unique
+completion). 
+

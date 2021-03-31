@@ -24,11 +24,13 @@ import qualified Data.Foldable as F
 
 import qualified Network.WebSockets as WS
 
+import LatexInput
+
 --------------------------------------------------------------------------------
 
-import Debug.Trace
-debug_ t y   = debug t y y
-debug  t x y = trace (">>> " ++ t ++ " = " ++ show x) y
+-- import Debug.Trace
+-- debug_ t y   = debug t y y
+-- debug  t x y = trace (">>> " ++ t ++ " = " ++ show x) y
 
 --------------------------------------------------------------------------------
 
@@ -167,6 +169,26 @@ encodeChangeLT :: Change -> LT.Text
 encodeChangeLT = LT.pack . encodeChange
 
 --------------------------------------------------------------------------------
+-- LaTeX style input
+
+-- | Last few characters (within the line)
+lookback :: Int -> Buffer -> String
+lookback k (Buffer seq) = case Seq.viewr seq of
+  _ :> line -> T.unpack (T.takeEnd k line)
+
+-- > usage: "\alpha<tab>"
+handleLaTeX :: Buffer -> Change -> Maybe Change
+handleLaTeX buffer change = case change of
+  Change range@(Range pos1 pos2) repl  
+    | repl /= "\t" -> Nothing
+    | otherwise    -> 
+        let revchars = reverse (lookback 16 (takeBuffer pos1 buffer)) in case findIndex (=='\\') revchars of
+          Nothing      -> Just (Change (Range pos1 (nextCol pos1)) "  ")   -- no latex -> tab = 2 spaces
+          Just j       -> let prefix = reverse $ take j revchars in case latexCompletion prefix of
+            Nothing      -> Just (Change (Range pos1 (nextCol pos1)) "")   -- not unique -> delete the tab character
+            Just ch      -> Just (Change (Range (moveLeft (j+1) pos1) (nextCol pos1)) (LT.singleton ch))
+
+--------------------------------------------------------------------------------
 
 htmlUnlines :: [String] -> String
 htmlUnlines = intercalate "<br/>"
@@ -217,6 +239,10 @@ handler state conn = forever $ do
 
       buf <- readMVar state
       let buf' = applyChange change buf
+
+      case handleLaTeX buf' change of 
+        Nothing    -> return ()
+        Just extra -> WS.sendTextData conn (LT.append "d," (encodeChangeLT extra))
 
       takeMVar state >> (putMVar state $! buf')
     
