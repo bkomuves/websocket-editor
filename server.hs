@@ -89,6 +89,7 @@ handlerLoop state conn = forever $ do
       threadDelay 1000
 
 --------------------------------------------------------------------------------
+-- ** positions and ranges 
 
 data Pos = Pos 
   { _line   :: !Int 
@@ -115,6 +116,9 @@ data Range
 data Change 
   = Change !Range !LT.Text
   deriving (Eq,Show)
+
+--------------------------------------------------------------------------------
+-- ** editor buffer type
 
 data Buffer 
   = Buffer { fromBuffer :: Seq T.Text }
@@ -155,6 +159,24 @@ glueBuffer (Buffer seq1) (Buffer seq2) = case Seq.viewr seq1 of
     mid2 :< bot  -> Buffer ((top |> (T.append mid1 mid2)) >< bot)
 
 --------------------------------------------------------------------------------
+-- ** protocol decoding
+
+parsePos :: LT.Text -> Maybe Pos
+parsePos what = case LT.splitOn ":" what of
+  [ln,col] -> Pos <$> readMaybe (LT.unpack ln) <*> readMaybe (LT.unpack col)
+  _        -> Nothing
+
+parseRange :: LT.Text -> Maybe Range
+parseRange what = case LT.splitOn "-" what of
+  [pos1,pos2] -> Range <$> parsePos pos1 <*> parsePos pos2 
+  _           -> Nothing
+
+parseChange :: LT.Text -> Maybe Change
+parseChange what = Change <$> parseRange header <*> pure (LT.tail rest) where 
+  (header,rest) = LT.span (/= ',') what
+
+--------------------------------------------------------------------------------
+-- ** protocol encodings
 
 encodePos :: Pos -> String
 encodePos (Pos y x) = show y ++ ":" ++ show x
@@ -169,7 +191,32 @@ encodeChangeLT :: Change -> LT.Text
 encodeChangeLT = LT.pack . encodeChange
 
 --------------------------------------------------------------------------------
--- LaTeX style input
+-- ** protocol commands
+
+setFeedbackContent :: WS.Connection -> LT.Text -> IO ()
+setFeedbackContent conn text = WS.sendTextData conn (LT.append "f," text)
+
+setErrorContent :: WS.Connection -> LT.Text -> IO ()
+setErrorContent conn text = WS.sendTextData conn (LT.append "e," text)
+
+setEditorContent :: WS.Connection -> LT.Text -> IO ()
+setEditorContent conn text = WS.sendTextData conn (LT.append "c," text)
+
+applyEditorChange :: WS.Connection -> Change -> IO ()
+applyEditorChange conn change = WS.sendTextData conn (LT.append "d," (encodeChangeLT change))
+
+-- | Input is the height of the top pane in percentages 
+-- (so should be in the range 0-100; and in practice, more like 20-80)
+setHorizontalSplit :: WS.Connection -> Int -> IO () 
+setHorizontalSplit conn ht = WS.sendTextData conn (T.pack $ "h," ++ show ht)
+
+-- | Input is the width of the left pane in percentages 
+-- (so should be in the range 0-100; and in practice, more like 20-80)
+setVerticalSplit :: WS.Connection -> Int -> IO () 
+setVerticalSplit conn wd = WS.sendTextData conn (T.pack $ "v," ++ show wd)
+
+--------------------------------------------------------------------------------
+-- ** LaTeX style input
 
 -- | Last few characters (within the line)
 lookback :: Int -> Buffer -> String
@@ -189,6 +236,7 @@ handleLaTeX buffer change = case change of
             Just ch      -> Just (Change (Range (moveLeft (j+1) pos1) (nextCol pos1)) (LT.singleton ch))
 
 --------------------------------------------------------------------------------
+-- ** HTML escaping
 
 htmlUnlines :: [String] -> String
 htmlUnlines = intercalate "<br/>"
@@ -203,25 +251,12 @@ escapeHTML = concatMap f where
   f c    = [c]
 
 --------------------------------------------------------------------------------
+-- ** The server
 
 type ServerState = Buffer
 
 initialServerState :: ServerState
 initialServerState = emptyBuffer
-
-parsePos :: LT.Text -> Maybe Pos
-parsePos what = case LT.splitOn ":" what of
-  [ln,col] -> Pos <$> readMaybe (LT.unpack ln) <*> readMaybe (LT.unpack col)
-  _        -> Nothing
-
-parseRange :: LT.Text -> Maybe Range
-parseRange what = case LT.splitOn "-" what of
-  [pos1,pos2] -> Range <$> parsePos pos1 <*> parsePos pos2 
-  _           -> Nothing
-
-parseChange :: LT.Text -> Maybe Change
-parseChange what = Change <$> parseRange header <*> pure (LT.tail rest) where 
-  (header,rest) = LT.span (/= ',') what
 
 handler :: MVar ServerState -> WS.Connection -> IO () 
 handler state conn = forever $ do
@@ -242,7 +277,7 @@ handler state conn = forever $ do
 
       case handleLaTeX buf' change of 
         Nothing    -> return ()
-        Just extra -> WS.sendTextData conn (LT.append "d," (encodeChangeLT extra))
+        Just extra -> applyEditorChange conn extra
 
       takeMVar state >> (putMVar state $! buf')
     
@@ -257,11 +292,9 @@ handler state conn = forever $ do
             , "words = " ++ show (length $ LT.words text)
             , "lines = " ++ show (length $ LT.lines text)
             ]
-    
       let htmltext = LT.pack $ escapeHTML $ LT.unpack text
-      WS.sendTextData conn (LT.append "f," feedback)
-      WS.sendTextData conn (LT.append "e," htmltext)
+
+      setFeedbackContent conn feedback
+      setErrorContent    conn htmltext
     
-      -- WS.sendTextData conn $ if (LT.length text         < 10) then ("v,30" :: T.Text) else "v,50" 
-      -- WS.sendTextData conn $ if (length (LT.lines text) < 4 ) then ("h,66" :: T.Text) else "h,40" 
          
